@@ -136,6 +136,14 @@ def cmd_weekly(a) -> None:
     print(f"レポート: {weekly()}")
 
 
+def cmd_reparse(a) -> None:
+    from .collect import Collector
+    from .config import load_config
+    from .fetcher import Fetcher
+    cfg = load_config(a.config)
+    Collector(cfg, fetcher=Fetcher(cfg, offline=True)).reparse_all()
+
+
 def main(argv=None) -> None:
     p = argparse.ArgumentParser(prog="python -m keiba", description="競馬予想・分析アプリ")
     p.add_argument("--config", help="config.yaml のパス")
@@ -188,6 +196,9 @@ def main(argv=None) -> None:
 
     w = sub.add_parser("weekly", help="結果の取り込み→答え合わせ→再学習（日曜の夜用）")
     w.set_defaults(func=cmd_weekly)
+
+    rp = sub.add_parser("reparse", help="キャッシュ済みの結果ページを読み直す（通信しない）")
+    rp.set_defaults(func=cmd_reparse)
 
     a = p.parse_args(argv)
     _setup_logging(a.verbose)

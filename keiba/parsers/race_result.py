@@ -9,7 +9,8 @@ from .common import (class_code, id_from_href, norm, normalize_class, normalize_
                      parse_course, parse_horse_weight, parse_sex_age, parse_time_sec, soup,
                      to_float, to_int)
 
-FINISH_STATUS_WORDS = ("中止", "除外", "取消", "失格")
+# 着順欄の表記（netkeiba は「中」「除」「取」「失」と1文字のことが多い）
+FINISH_STATUS = {"中": "中止", "除": "除外", "取": "取消", "失": "失格"}
 
 
 class ParseError(ValueError):
@@ -54,8 +55,8 @@ def parse_race_result(html: str, race_id: str) -> dict:
         pos_text = text("着順")
         finish_pos = to_int(pos_text) if re.match(r"^\d", pos_text) else None
         status = None
-        for w in FINISH_STATUS_WORDS:
-            if w in pos_text:
+        for k, w in FINISH_STATUS.items():
+            if pos_text.startswith(k):
                 status = w
         if "降" in pos_text:
             status = "降着"

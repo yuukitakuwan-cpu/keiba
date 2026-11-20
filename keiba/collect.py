@@ -135,6 +135,23 @@ class Collector:
         db.save_race_result(self.engine, parsed)
         return True
 
+    def reparse_all(self) -> int:
+        """キャッシュ済みの結果ページを読み直してDBを作り直す（パーサを直したとき用。通信しない）。"""
+        ids = sorted(db.done_keys(self.engine, "race", statuses=("done",)))
+        n = 0
+        for rid in ids:
+            raw = self.fetcher.read_cache(f"{DB_BASE}/race/{rid}/")
+            if raw is None:
+                continue
+            from .fetcher import decode_html
+            try:
+                db.save_race_result(self.engine, parse_race_result(decode_html(raw), rid))
+                n += 1
+            except ParseError as e:
+                log.warning("%s", e)
+        self.progress(f"{n} レースを読み直しました")
+        return n
+
     # ---------- 確定オッズ ----------
     def collect_final_odds(self, race_ids: Iterable[str] | None = None,
                            limit: int | None = None) -> int:
