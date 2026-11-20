@@ -19,7 +19,7 @@ BASE_SQL = """
 SELECT
   e.race_id, e.horse_no, e.frame_no, e.horse_id, e.sex, e.age, e.weight_carried,
   e.jockey_id, e.trainer_id, e.horse_weight, e.weight_diff, e.odds_win, e.popularity,
-  e.finish_pos, e.finish_status, e.time_sec, e.margin, e.passing, e.last3f,
+  e.finish_pos, e.finish_status, e.time_sec, e.margin, e.passing, e.last3f, e.prize,
   r.date, r.venue_code, r.venue, r.race_no, r.race_name, r.grade, r.class_name, r.class_code,
   r.age_cond, r.surface, r.direction, r.inout, r.distance, r.weather, r.track_condition,
   r.field_size, r.pace_front3f, r.pace_back3f,
@@ -148,8 +148,8 @@ def attach_payouts(engine, df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def load_base(engine, start: str | None = None, end: str | None = None,
-              with_payouts: bool = True) -> pd.DataFrame:
+def load_raw(engine, start: str | None = None, end: str | None = None) -> pd.DataFrame:
+    """BASE_SQL の結果そのもの（派生項目なし）。"""
     sql = BASE_SQL
     params = {}
     if start:
@@ -158,7 +158,12 @@ def load_base(engine, start: str | None = None, end: str | None = None,
     if end:
         sql += " AND r.date <= :end"
         params["end"] = end
-    df = db.read_sql(engine, sql, params)
+    return db.read_sql(engine, sql, params)
+
+
+def load_base(engine, start: str | None = None, end: str | None = None,
+              with_payouts: bool = True) -> pd.DataFrame:
+    df = load_raw(engine, start, end)
     if df.empty:
         return df
     df = add_derived(df)

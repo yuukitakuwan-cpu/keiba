@@ -65,6 +65,71 @@ def cmd_stats(a) -> None:
         t.to_csv(a.csv, index=False, encoding="utf-8-sig")
 
 
+def cmd_train(a) -> None:
+    from . import db
+    from .config import load_config
+    from .model import adopt, load_current, record_run, train
+    cfg = load_config(a.config)
+    eng = db.get_engine(cfg)
+    bundle, m = train(eng, cfg, valid_from=a.valid_from, until=a.until)
+    print("検証結果:", json.dumps(m, ensure_ascii=False, indent=2))
+    print("\n特徴量の重要度（上位20）:")
+    print(bundle.importance().head(20).to_string(index=False))
+    cur = load_current(cfg)
+    if a.force or cur is None:
+        adopt(bundle, cfg, eng, note="手動学習")
+        print(f"\nモデル {bundle.version} を採用しました。")
+    else:
+        record_run(bundle, cfg, eng, adopted=False, note="手動学習（未採用）")
+        print(f"\nモデル {bundle.version} を保存しました（採用は --force で）。")
+
+
+def cmd_backtest(a) -> None:
+    import pandas as pd
+
+    from . import db
+    from .backtest import DEFAULT_STRATEGIES, compare, load_market, run_backtest
+    from .config import load_config, resolve_path
+    from .features import load_base
+    from .model import load_training_frame, walk_forward
+    cfg = load_config(a.config)
+    eng = db.get_engine(cfg)
+    feat = load_training_frame(eng, cfg)
+    pred = walk_forward(feat, cfg, a.start, a.end, step_months=a.step)
+    if pred.empty:
+        print("予測できる期間がありません（学習データが足りない可能性があります）")
+        return
+    ent = feat[["race_id", "horse_no", "date", "odds_win", "popularity"]]
+    odds, pays = load_market(eng, list(pred["race_id"].unique()))
+    res = run_backtest(pred, ent, odds, pays, DEFAULT_STRATEGIES)
+    out = compare(res)
+    pd.set_option("display.width", 250)
+    pd.set_option("display.unicode.east_asian_width", True)
+    print(out.to_string(index=False))
+    d = resolve_path(cfg, "data/backtest")
+    d.mkdir(parents=True, exist_ok=True)
+    pred.to_csv(d / "walk_forward_predictions.csv", index=False)
+    print(f"\n予測を {d / 'walk_forward_predictions.csv'} に保存しました（画面のバックテストで使います）")
+
+
+def cmd_predict(a) -> None:
+    from .predict import Predictor, format_text
+    p = Predictor()
+    r = p.predict_race(a.date, a.venue, a.race, budget=a.budget)
+    print(format_text(r))
+
+
+def cmd_auto_predict(a) -> None:
+    from .weekly import auto_predict
+    out = auto_predict(a.date, budget=a.budget)
+    print(f"保存しました: {out}" if out else "開催がありません")
+
+
+def cmd_weekly(a) -> None:
+    from .weekly import weekly
+    print(f"レポート: {weekly()}")
+
+
 def main(argv=None) -> None:
     p = argparse.ArgumentParser(prog="python -m keiba", description="競馬予想・分析アプリ")
     p.add_argument("--config", help="config.yaml のパス")
@@ -90,6 +155,33 @@ def main(argv=None) -> None:
     s.add_argument("--csv", help="結果をCSVに保存")
     s.add_argument("--list", action="store_true", help="切り口の一覧を表示")
     s.set_defaults(func=cmd_stats)
+
+    t = sub.add_parser("train", help="予測モデルを学習する（時系列で検証）")
+    t.add_argument("--valid-from", help="検証期間の開始日（省略時は直近 model.valid_months か月）")
+    t.add_argument("--until", help="この日までのデータで学習")
+    t.add_argument("--force", action="store_true", help="成績に関係なく本番モデルとして採用する")
+    t.set_defaults(func=cmd_train)
+
+    b = sub.add_parser("backtest", help="walk-forward で予測して、買い方ごとの回収率を比べる")
+    b.add_argument("--start", required=True, help="バックテスト開始日")
+    b.add_argument("--end", help="終了日")
+    b.add_argument("--step", type=int, default=1, help="何か月ごとに学習し直すか")
+    b.set_defaults(func=cmd_backtest)
+
+    r = sub.add_parser("predict", help="レース予想を出す")
+    r.add_argument("--date", required=True, help="開催日 YYYY-MM-DD")
+    r.add_argument("--venue", required=True, help="競馬場（例 東京）")
+    r.add_argument("--race", type=int, required=True, help="R番号")
+    r.add_argument("--budget", type=int, default=10000, help="予算（円）")
+    r.set_defaults(func=cmd_predict)
+
+    ap = sub.add_parser("auto-predict", help="その日の全レースを自動で予想して保存する（土日の朝用）")
+    ap.add_argument("--date", help="開催日（省略時は今日）")
+    ap.add_argument("--budget", type=int, default=10000)
+    ap.set_defaults(func=cmd_auto_predict)
+
+    w = sub.add_parser("weekly", help="結果の取り込み→答え合わせ→再学習（日曜の夜用）")
+    w.set_defaults(func=cmd_weekly)
 
     a = p.parse_args(argv)
     _setup_logging(a.verbose)

@@ -33,8 +33,12 @@ model:
   dir: data/models
   # 検証に使う直近期間（月）。この期間より前で学習し、この期間で評価します。
   valid_months: 6
-  # 新しいモデルを採用する条件：検証の logloss が旧モデルより小さいこと
+  # 新しいモデルを採用する条件：検証の logloss(複勝) が「今のモデルの検証成績 + この値」以下
+  adopt_tolerance: 0.002
+  # 学習データがこれより少ないと警告する
   min_train_races: 300
+  # バックテスト（walk-forward）で毎回学習する木の数
+  walk_forward_trees: 300
   lightgbm:
     n_estimators: 600
     learning_rate: 0.03

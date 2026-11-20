@@ -29,6 +29,42 @@ class FetchError(RuntimeError):
     pass
 
 
+class _FileLock:
+    """プロセスをまたいで「1度に1リクエスト」を守るためのロック（Windows / Mac / Linux）。"""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.f = None
+
+    def __enter__(self):
+        self.f = open(self.path, "a+b")
+        if os.name == "nt":
+            import msvcrt
+            while True:
+                try:
+                    self.f.seek(0)
+                    msvcrt.locking(self.f.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:
+                    time.sleep(0.5)
+        else:
+            import fcntl
+            fcntl.flock(self.f.fileno(), fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            if os.name == "nt":
+                import msvcrt
+                self.f.seek(0)
+                msvcrt.locking(self.f.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.f.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.f.close()
+
+
 def decode_html(raw: bytes) -> str:
     """netkeiba のページは現在 UTF-8 だが、古いページは EUC-JP のことがある。"""
     head = raw[:2048].lower()
@@ -57,6 +93,7 @@ class Fetcher:
             "Accept-Language": "ja,en;q=0.8",
         })
         self._stamp = self.cache_dir / ".last_request"
+        self._lock = _FileLock(self.cache_dir / ".request.lock")
         self.requests_made = 0
         self.cache_hits = 0
 
@@ -117,9 +154,12 @@ class Fetcher:
             raise FetchError(f"offline mode and not cached: {url}")
         last_err: Exception | None = None
         for attempt in range(self.max_retries + 1):
-            self._wait_turn()
             try:
-                r = self.session.get(url, timeout=self.timeout)
+                # ロックを持ったまま「待つ→取得」するので、別プロセスと同時に取りに行くことはない
+                with self._lock:
+                    self._wait_turn()
+                    r = self.session.get(url, timeout=self.timeout)
+                    self._stamp.write_text(str(time.time()))
                 self.requests_made += 1
                 if r.status_code == 200:
                     raw = r.content
