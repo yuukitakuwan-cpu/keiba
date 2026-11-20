@@ -237,9 +237,10 @@ with tab_pred:
                              column_config={c: PCT for c in ("勝率", "複勝率", "単勝回収率", "複勝回収率")})
 
         st.markdown("### 2. 各馬の評価")
-        tb = pct_cols(p.table, ["推定勝率", "推定複勝率"])
+        tb = pct_cols(p.table, ["推定勝率", "推定複勝率", "買い目用勝率"])
+        st.caption("推定勝率・複勝率＝モデルの予想。買い目の期待値は、モデルと単勝オッズを合成した『買い目用勝率』で計算します。")
         st.dataframe(tb, hide_index=True, use_container_width=True, column_config={
-            "推定勝率": PCT, "推定複勝率": PCT,
+            "推定勝率": PCT, "推定複勝率": PCT, "買い目用勝率": PCT,
             "単勝オッズ": st.column_config.NumberColumn(format="%.1f"),
             "期待値(単)": st.column_config.NumberColumn(format="%.2f"),
             "根拠": st.column_config.TextColumn(width="large")})
@@ -309,8 +310,15 @@ with tab_bt:
         names = [s.name for s in DEFAULT_STRATEGIES]
         chosen = st.multiselect("比べる買い方", names, default=names[:4])
         strategies = [s for s in DEFAULT_STRATEGIES if s.name in chosen] + [custom]
+        from keiba.model import load_current
+        _cur = load_current(CFG)
+        _a = CFG["betting"].get("market_alpha")
+        if not isinstance(_a, (int, float)):
+            _a = _cur.meta.get("market_alpha", 0.5) if _cur else 0.5
+        alpha = st.slider("モデルと市場オッズの合成比率 α（1=モデルだけ、0=オッズだけ）", 0.0, 1.0, float(_a), 0.05,
+                          help="期待値の判断に使う勝率 ∝ モデル^α × 市場^(1-α)。初期値は学習時に検証データで決めた値です。")
         odds, pays = load_market(ENGINE, list(pred["race_id"].unique()))
-        res = run_backtest(pred, ent, odds, pays, strategies)
+        res = run_backtest(pred, ent, odds, pays, strategies, alpha=alpha)
         cmp_ = compare(res)
         st.dataframe(pct_cols(cmp_, ["回収率", "的中率(点)", "的中率(レース)"]), hide_index=True,
                      use_container_width=True,

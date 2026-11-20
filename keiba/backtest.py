@@ -32,12 +32,13 @@ class Strategy:
 DEFAULT_STRATEGIES = [
     Strategy("◎の単勝（毎レース100円）", "top_pick"),
     Strategy("1番人気の単勝（比較用）", "favorite"),
-    Strategy("単勝 期待値1.1以上", "ev", ("単勝",), 1.1, 0.03),
-    Strategy("複勝 期待値1.05以上", "ev", ("複勝",), 1.05, 0.1),
-    Strategy("馬連 期待値1.2以上", "ev", ("馬連",), 1.2, 0.01),
-    Strategy("ワイド 期待値1.1以上", "ev", ("ワイド",), 1.1, 0.03),
-    Strategy("三連複 期待値1.3以上", "ev", ("三連複",), 1.3, 0.003),
-    Strategy("総合（1/4ケリー・資金1万円）", "kelly", ("単勝", "複勝", "馬連", "ワイド", "三連複"), 1.05, 0.01),
+    Strategy("単勝 期待値1.1以上", "ev", ("単勝",), 1.1, 0.04),
+    Strategy("複勝 期待値1.05以上", "ev", ("複勝",), 1.05, 0.15),
+    Strategy("馬連 期待値1.2以上", "ev", ("馬連",), 1.2, 0.015),
+    Strategy("ワイド 期待値1.1以上", "ev", ("ワイド",), 1.1, 0.04),
+    Strategy("三連複 期待値1.3以上", "ev", ("三連複",), 1.3, 0.006),
+    Strategy("総合（予想画面と同じ・1/4ケリー・資金1万円）", "kelly", ("単勝", "複勝", "馬連", "ワイド", "三連複"),
+             1.05, {"単勝": 0.04, "複勝": 0.15, "馬連": 0.015, "ワイド": 0.04, "三連複": 0.006}),
 ]
 
 
@@ -53,14 +54,22 @@ def load_market(engine, race_ids: list[str]) -> tuple[pd.DataFrame, pd.DataFrame
 
 
 def run_backtest(pred: pd.DataFrame, entries: pd.DataFrame, odds: pd.DataFrame,
-                 payouts: pd.DataFrame, strategies: list[Strategy]) -> dict[str, pd.DataFrame]:
+                 payouts: pd.DataFrame, strategies: list[Strategy],
+                 alpha: float | None = 0.5) -> dict[str, pd.DataFrame]:
     """戦略ごとの買い目一覧（race_id, date, 券種, 買い目, 金額, 払戻）を返す。
+
+    alpha: モデルと市場オッズを合成する比率（1 または None ならモデルだけ）
 
     pred: race_id, horse_no, p_win, p_top3
     entries: race_id, horse_no, date, odds_win, popularity
     """
     d = pred.merge(entries[["race_id", "horse_no", "date", "odds_win", "popularity"]],
                    on=["race_id", "horse_no"], how="left")
+    # ◎はモデルの予想、期待値の判断は予想画面と同じく市場と合成した勝率で行う
+    d["p_win_model"] = d["p_win"]
+    if alpha is not None and alpha < 1:
+        from .model import blend_with_market
+        d["p_win"] = blend_with_market(d, "p_win", "odds_win", alpha)
     odds_by_race = {k: v for k, v in odds.groupby("race_id")} if len(odds) else {}
     pay_by_race = {k: v for k, v in payouts.groupby("race_id")} if len(payouts) else {}
     results: dict[str, list] = {s.name: [] for s in strategies}
@@ -78,7 +87,7 @@ def run_backtest(pred: pd.DataFrame, entries: pd.DataFrame, odds: pd.DataFrame,
         for s in strategies:
             bets = []
             if s.mode == "top_pick":
-                top = g.loc[g["p_win"].idxmax()]
+                top = g.loc[g["p_win_model"].idxmax()]
                 bets = [("単勝", str(int(top["horse_no"])), 100)]
             elif s.mode == "favorite":
                 fav = g[g["popularity"] == 1]

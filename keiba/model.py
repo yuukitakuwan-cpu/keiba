@@ -230,6 +230,40 @@ def normalize_probs(df: pd.DataFrame, raw_win: np.ndarray, raw_top3: np.ndarray)
     return w.to_numpy(), t.to_numpy()
 
 
+def market_probs(df: pd.DataFrame, odds_col: str = "odds_win") -> pd.Series:
+    """単勝オッズから出した勝率（控除率を除いて合計1に揃える）。"""
+    inv = 1 / df[odds_col]
+    return inv / inv.groupby(df["race_id"]).transform("sum")
+
+
+def blend_with_market(df: pd.DataFrame, p_col: str = "p_win", odds_col: str = "odds_win",
+                      alpha: float = 0.5) -> pd.Series:
+    """モデルの勝率と市場の勝率を掛け合わせて合成する（p ∝ モデル^α × 市場^(1-α)）。
+
+    オッズが無い馬はモデルの値をそのまま使う。
+    """
+    pm = market_probs(df, odds_col)
+    pw = df[p_col].clip(1e-6, 1)
+    comb = np.where(pm.notna(), np.exp(alpha * np.log(pw) + (1 - alpha) * np.log(pm.clip(1e-6, 1))), pw)
+    comb = pd.Series(comb, index=df.index)
+    return comb / comb.groupby(df["race_id"]).transform("sum")
+
+
+def fit_alpha(pred: pd.DataFrame, truth: pd.DataFrame) -> tuple[float, float]:
+    """検証データで、合成の比率 α（0〜1）を勝ち馬の logloss が最小になるように決める。"""
+    d = pred.merge(truth[["race_id", "horse_no", "is_win", "odds_win"]], on=["race_id", "horse_no"])
+    d = d.dropna(subset=["odds_win", "is_win"])
+    if d.empty or d["is_win"].nunique() < 2:
+        return 0.5, float("nan")
+    best = (0.5, float("inf"))
+    for a in np.linspace(0, 1, 21):
+        p = blend_with_market(d, alpha=a).clip(1e-6, 1 - 1e-6)
+        ll = float(log_loss(d["is_win"], p, labels=[0, 1]))
+        if ll < best[1]:
+            best = (float(a), ll)
+    return best
+
+
 class ModelBundle:
     def __init__(self, win_model, top3_model, categories, meta):
         self.win_model = win_model
@@ -351,8 +385,12 @@ def train(engine=None, cfg: dict | None = None, valid_from: str | None = None,
 
     models, cats, best = fit_models(tr, cfg, valid=va)
     vb = ModelBundle(models["is_win"], models["is_top3"], cats, {})
-    metrics = evaluate(vb.predict(va), va)
+    vpred = vb.predict(va)
+    metrics = evaluate(vpred, va)
     metrics["best_iteration"] = best
+    alpha, ll_blend = fit_alpha(vpred, va)
+    metrics["market_alpha"] = alpha
+    metrics["logloss_win_blend"] = ll_blend
 
     # 本番用：全期間で学習し直す
     n_est = max(50, int(np.mean(list(best.values())) * 1.1))
@@ -364,6 +402,7 @@ def train(engine=None, cfg: dict | None = None, valid_from: str | None = None,
         "valid_from": str(vf.date()),
         "data_until": str(last.date()),
         "n_estimators": n_est,
+        "market_alpha": alpha,
         "metrics": metrics,
         "features": FEATURES,
     }

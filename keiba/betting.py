@@ -50,13 +50,16 @@ def harville_tables(p_win: dict[int, float]) -> dict[str, dict[str, float]]:
 def combo_probs(pred: pd.DataFrame) -> dict[str, dict[str, float]]:
     """1レース分の予測（horse_no, p_win, p_top3）→ 券種ごとの確率。
 
-    複勝はモデルの p_top3 をそのまま使う。
+    複勝は「モデルの p_top3」と「p_win から Harville で出した3着内率」の平均を使う
+    （p_win を市場と合成したときに、複勝も同じ方向に補正されるようにするため）。
     """
     pw = dict(zip(pred["horse_no"].astype(int), pred["p_win"]))
     t = harville_tables(pw)
+    place = {str(int(n)): float(0.5 * p + 0.5 * t["複勝(H)"][str(int(n))])
+             for n, p in zip(pred["horse_no"], pred["p_top3"])}
     probs = {
         "単勝": {str(int(n)): float(p) for n, p in zip(pred["horse_no"], pred["p_win"])},
-        "複勝": {str(int(n)): float(p) for n, p in zip(pred["horse_no"], pred["p_top3"])},
+        "複勝": place,
         "馬連": t["馬連"], "ワイド": t["ワイド"], "三連複": t["三連複"],
     }
     return probs
@@ -78,14 +81,16 @@ class BetConfig:
     max_race_exposure: float = 0.5
     max_tickets_per_type: int = 5
     bet_types: tuple = ("単勝", "複勝", "馬連", "ワイド", "三連複")
-    min_prob: float = 0.0  # 当たる確率が低すぎる買い目を除く（例 0.01）
+    # 当たる確率が低すぎる買い目を除く（券種ごと）。数値1つなら全券種共通
+    min_prob: float | dict = 0.0
 
     @classmethod
     def from_cfg(cls, cfg: dict, **over) -> "BetConfig":
         b = cfg.get("betting", {})
         kw = dict(kelly_fraction=b.get("kelly_fraction", 0.25), min_ev=b.get("min_expected_value", 1.05),
                   min_bet=b.get("min_bet", 100), max_race_exposure=b.get("max_race_exposure", 0.5),
-                  max_tickets_per_type=b.get("max_tickets_per_type", 5))
+                  max_tickets_per_type=b.get("max_tickets_per_type", 5),
+                  min_prob=b.get("min_prob", 0.0))
         kw.update(over)
         return cls(**kw)
 
@@ -99,9 +104,10 @@ def candidates(probs: dict[str, dict[str, float]], odds: dict[str, dict[str, flo
     rows = []
     for bt in bc.bet_types:
         po, oo = probs.get(bt, {}), odds.get(bt, {})
+        mp = bc.min_prob.get(bt, 0.0) if isinstance(bc.min_prob, dict) else bc.min_prob
         for combo, p in po.items():
             o = oo.get(combo)
-            if o is None or not np.isfinite(o) or o <= 1.0 or p < bc.min_prob:
+            if o is None or not np.isfinite(o) or o <= 1.0 or p < mp:
                 continue
             ev = p * o
             rows.append({"券種": bt, "買い目": combo, "推定確率": p, "オッズ": o, "期待値": ev,

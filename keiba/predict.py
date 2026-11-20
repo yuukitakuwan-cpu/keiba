@@ -23,7 +23,7 @@ from .collect import Collector
 from .config import load_config
 from .constants import CLASS_RANK, VENUE_CODE_BY_NAME, VENUES
 from .features import add_derived, load_base, load_raw
-from .model import ModelBundle, build_features, load_current
+from .model import ModelBundle, blend_with_market, build_features, load_current
 from .stats import summarize, upset_rate
 
 log = logging.getLogger(__name__)
@@ -127,6 +127,14 @@ class Predictor:
             self.col.collect_horse_details(horse_ids=missing)
 
     @property
+    def alpha(self) -> float:
+        """モデルと市場を合成する比率（1 ならモデルだけ）。"""
+        a = self.cfg.get("betting", {}).get("market_alpha", "auto")
+        if isinstance(a, (int, float)):
+            return float(a)
+        return float(self.model.meta.get("market_alpha", 0.5))
+
+    @property
     def raw(self) -> pd.DataFrame:
         if self._raw is None:
             r = load_raw(self.engine)
@@ -187,9 +195,15 @@ class Predictor:
         else:
             notes.append("オッズがまだ出ていないため、期待値と荒れ度の一部は計算できません。")
 
+        # 買い目の判断には「モデル × 市場」の合成確率を使う（穴馬の過大評価を防ぐ）
+        rows["p_win_model"] = rows["p_win"]
+        if win_odds and rows["odds_win"].notna().sum() >= 2:
+            rows["p_win_bet"] = blend_with_market(rows, "p_win", "odds_win", self.alpha).to_numpy()
+        else:
+            rows["p_win_bet"] = rows["p_win"]
         pace = self.pace_forecast(rows, race)
         table = self.horse_table(rows, race)
-        probs = combo_probs(rows[["horse_no", "p_win", "p_top3"]])
+        probs = combo_probs(rows[["horse_no", "p_win_bet", "p_top3"]].rename(columns={"p_win_bet": "p_win"}))
         bc = BetConfig.from_cfg(self.cfg)
         cands = candidates(probs, mk, bc) if mk else candidates(probs, {}, bc)
         bets = allocate(cands, budget, bc)
@@ -275,18 +289,19 @@ class Predictor:
         rest = r.iloc[3:].sort_values("p_top3", ascending=False).index[:2]
         r.loc[rest, "印"] = "△"
         r["根拠"] = [self.comment(x, rows, race) for _, x in r.iterrows()]
-        r["期待値(単)"] = r["p_win"] * r["odds_win"]
+        r["期待値(単)"] = r["p_win_bet"] * r["odds_win"]
         out = r[["印", "horse_no", "frame_no", "horse_name", "jockey_name", "p_win", "p_top3", "odds_win",
-                 "popularity", "期待値(単)", "根拠"]].rename(columns={
+                 "popularity", "p_win_bet", "期待値(単)", "根拠"]].rename(columns={
                      "horse_no": "馬番", "frame_no": "枠", "horse_name": "馬名", "jockey_name": "騎手",
-                     "p_win": "推定勝率", "p_top3": "推定複勝率", "odds_win": "単勝オッズ", "popularity": "人気"})
+                     "p_win": "推定勝率", "p_top3": "推定複勝率", "odds_win": "単勝オッズ", "popularity": "人気",
+                     "p_win_bet": "買い目用勝率"})
         return out.sort_values("推定勝率", ascending=False).reset_index(drop=True)
 
     @staticmethod
     def comment(x: pd.Series, rows: pd.DataFrame, race: dict) -> str:
         good, bad = [], []
         if pd.isna(x.get("h_finish_ratio_mean5")):
-            good.append("初出走/データなし")
+            good.append("新馬" if race.get("class_name") == "新馬" else "過去走データなし")
         else:
             m = rows["h_finish_ratio_mean5"]
             if x["h_finish_ratio_mean5"] <= m.quantile(0.25):
@@ -363,7 +378,7 @@ class Predictor:
         r = rows.copy()
         r["rank_top3"] = r["p_top3"].rank(ascending=False)
         cond = (r["popularity"] >= 6) | (r["odds_win"] >= 15)
-        holes = r[cond & ((r["rank_top3"] <= 5) | (r["p_win"] * r["odds_win"] >= 1.2))]
+        holes = r[cond & ((r["rank_top3"] <= 5) | (r["p_win_bet"] * r["odds_win"] >= 1.2))]
         hole_list = []
         for _, x in holes.sort_values("p_top3", ascending=False).head(3).iterrows():
             reason = self.comment(x, rows, race)
@@ -426,6 +441,7 @@ def format_text(p: RacePrediction) -> str:
         odds = "" if pd.isna(x["単勝オッズ"]) else f"{x['単勝オッズ']:.1f}倍"
         L.append(f"  {x['印'] or '  '} {int(x['馬番']):>2} {x['馬名']:<10} 勝率{x['推定勝率']:6.1%} "
                  f"複勝率{x['推定複勝率']:6.1%} {odds:>7}  {x['根拠']}")
+    L.append("  （推定勝率＝モデルの予想。買い目の期待値は、モデルと単勝オッズを合成した『買い目用勝率』で計算）")
     L.append("\n【3. 買い目（回収率重視）】")
     s = p.bet_summary
     L.append(f"  {s['判断']}" + (f"：{s['理由']}" if "理由" in s else

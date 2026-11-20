@@ -101,7 +101,13 @@ def cmd_backtest(a) -> None:
         return
     ent = feat[["race_id", "horse_no", "date", "odds_win", "popularity"]]
     odds, pays = load_market(eng, list(pred["race_id"].unique()))
-    res = run_backtest(pred, ent, odds, pays, DEFAULT_STRATEGIES)
+    from .model import load_current
+    cur = load_current(cfg)
+    alpha = cfg["betting"].get("market_alpha")
+    if not isinstance(alpha, (int, float)):
+        alpha = cur.meta.get("market_alpha", 0.5) if cur else 0.5
+    print(f"モデルと市場の合成比率 α={alpha}（1=モデルだけ）")
+    res = run_backtest(pred, ent, odds, pays, DEFAULT_STRATEGIES, alpha=alpha)
     out = compare(res)
     pd.set_option("display.width", 250)
     pd.set_option("display.unicode.east_asian_width", True)

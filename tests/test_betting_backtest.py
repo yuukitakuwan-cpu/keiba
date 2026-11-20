@@ -74,3 +74,28 @@ def test_drawdown():
                          "券種": ["単勝"] * 3, "買い目": ["1"] * 3, "金額": [100] * 3, "払戻": [300, 0, 0]})
     s = summarize_bets(bets)
     assert s["最大ドローダウン"] == 200 and s["収支"] == 0
+
+
+def test_blend_with_market():
+    from keiba.model import blend_with_market, fit_alpha
+    df = pd.DataFrame({"race_id": ["a"] * 3, "horse_no": [1, 2, 3], "p_win": [0.2, 0.3, 0.5],
+                       "odds_win": [1.5, 5.0, 20.0]})
+    assert blend_with_market(df, alpha=1.0).tolist() == pytest.approx([0.2, 0.3, 0.5])
+    m = blend_with_market(df, alpha=0.0)
+    assert m.sum() == pytest.approx(1) and m.iloc[0] > 0.7  # 市場だけなら1番人気が高い
+    # 市場がよく当たるデータなら α は小さくなる
+    rows = []
+    for i in range(200):
+        rows.append({"race_id": str(i), "horse_no": 1, "p_win": 0.33, "odds_win": 1.5, "is_win": 1})
+        rows.append({"race_id": str(i), "horse_no": 2, "p_win": 0.33, "odds_win": 5.0, "is_win": 0})
+        rows.append({"race_id": str(i), "horse_no": 3, "p_win": 0.34, "odds_win": 20.0, "is_win": 0})
+    d = pd.DataFrame(rows)
+    a, _ = fit_alpha(d[["race_id", "horse_no", "p_win"]], d)
+    assert a <= 0.1
+
+
+def test_min_prob_per_type():
+    probs = {"単勝": {"1": 0.03, "2": 0.3}}
+    odds = {"単勝": {"1": 100.0, "2": 4.0}}
+    c = candidates(probs, odds, BetConfig(bet_types=("単勝",), min_prob={"単勝": 0.04}))
+    assert list(c["買い目"]) == ["2"]
