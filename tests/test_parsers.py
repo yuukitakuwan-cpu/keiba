@@ -109,3 +109,19 @@ def test_small_helpers():
     c = parse_course("障芝 外3000m")
     assert c["surface"] == "障害" and c["distance"] == 3000
     assert parse_course("芝直線1000m")["direction"] == "直線"
+
+
+def test_odds_placeholders_are_dropped():
+    import json
+    from keiba.parsers.racecard import parse_odds_json
+    j = {"status": "middle", "data": {"official_datetime": "2026-11-20 18:37:55", "odds": {
+        "1": {"01": ["999.9", "", "8"], "02": ["3.2", "", "1"]},
+        "2": {"01": ["0", "999.9", "1"], "02": ["1.1", "1.6", "2"]}}}}
+    win = {r["combination"]: r["odds"] for r in parse_odds_json(json.dumps(j), 1)["rows"]}
+    assert win == {"1": None, "2": 3.2}
+    place = {r["combination"]: (r["odds"], r["odds_max"]) for r in parse_odds_json(json.dumps(j), 2)["rows"]}
+    assert place == {"1": (None, None), "2": (1.1, 1.6)}
+    # 確定オッズの 999.9 は本物として残す
+    j["status"] = "result"
+    win = {r["combination"]: r["odds"] for r in parse_odds_json(json.dumps(j), 1)["rows"]}
+    assert win["1"] == 999.9

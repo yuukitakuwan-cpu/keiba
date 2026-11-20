@@ -118,11 +118,27 @@ def parse_shutuba(html: str, race_id: str, date: str | None = None) -> dict:
     return {"race": race, "entries": entries}
 
 
+# 票が入っていない組み合わせに出る仮の値（発売直後に多い）
+PLACEHOLDER_ODDS = {999.9, 9999.9, 99999.9}
+
+
+def _odds_value(v: str, status: str | None) -> float | None:
+    if v in ("", "---.-"):
+        return None
+    o = to_float(v)
+    if o is None or o <= 0:
+        return None
+    if status != "result" and o in PLACEHOLDER_ODDS:
+        return None
+    return o
+
+
 def parse_odds_json(text: str, odds_type: int) -> dict:
     """オッズAPIの JSON → {status, official_datetime, rows:[{combination, odds, odds_max, popularity}]}
 
     status: 'yoso'（前売り前の予想オッズ） / 'middle'（発売中） / 'result'（確定） / 'NG'
     combination は '04' や '0415' のような2桁区切りを '4' / '4-15' に直す。
+    発売中の 999.9 / 9999.9 / 99999.9（票が入っていない仮の値）と 0 はオッズなし（None）にする。
     """
     try:
         j = json.loads(text)
@@ -136,8 +152,8 @@ def parse_odds_json(text: str, odds_type: int) -> dict:
     rows = []
     for combo, vals in odds.items():
         nums = [str(int(combo[i:i + 2])) for i in range(0, len(combo), 2)]
-        o = to_float(vals[0]) if vals and vals[0] not in ("", "---.-") else None
-        o2 = to_float(vals[1]) if len(vals) > 1 and vals[1] not in ("", "0.0") else None
+        o = _odds_value(vals[0], status) if vals else None
+        o2 = _odds_value(vals[1], status) if len(vals) > 1 else None
         rows.append({
             "bet_type": ODDS_TYPES[odds_type],
             "combination": "-".join(nums),

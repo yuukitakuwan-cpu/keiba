@@ -184,15 +184,25 @@ class Predictor:
         odds_status = "なし"
         mk: dict = {}
         if odds_rows is not None and len(odds_rows):
-            odds_status = {"yoso": "予想オッズ（発売前）", "middle": "発売中のオッズ", "result": "確定オッズ"}.get(
-                str(odds_rows["status"].iloc[0]), str(odds_rows["status"].iloc[0]))
+            st = str(odds_rows["status"].iloc[0])
+            odds_status = {"yoso": "予想オッズ（発売前）", "middle": "発売中のオッズ", "result": "確定オッズ"}.get(st, st)
+            if "official_datetime" in odds_rows and odds_rows["official_datetime"].notna().any():
+                odds_status += f"（{str(odds_rows['official_datetime'].dropna().iloc[0])[5:16]} 時点）"
             mk = odds_from_rows(odds_rows)
+            n_runners = sum(1 for e in card["entries"] if not e.get("cancelled"))
+            n_valid = len(mk.get("単勝", {}))
+            if st == "yoso" or (n_runners and n_valid < 0.8 * n_runners):
+                # 発売直後で票の入っていない馬が多い → オッズが当てにならないので使わない
+                notes.append(f"オッズに票が入っていない馬が多い（{n_valid}/{n_runners}頭）ため、"
+                             "オッズを使わずに予想しました。買い目は発売が進んでから（当日朝以降）もう一度予想してください。")
+                odds_status += "・不安定のため不使用"
+                mk = {}
         win_odds = mk.get("単勝", {})
         rows["odds_win"] = rows["horse_no"].map(lambda n: win_odds.get(str(int(n))))
         if win_odds:
             r = pd.Series(win_odds).astype(float).rank(method="min")
             rows["popularity"] = rows["horse_no"].map(lambda n: r.get(str(int(n))))
-        else:
+        elif not notes:
             notes.append("オッズがまだ出ていないため、期待値と荒れ度の一部は計算できません。")
 
         # 買い目の判断には「モデル × 市場」の合成確率を使う（穴馬の過大評価を防ぐ）
@@ -209,7 +219,7 @@ class Predictor:
         bets = allocate(cands, budget, bc)
         if bets.empty:
             summary = {"判断": "見送り推奨", "理由": "期待値が基準（%.2f）を超える買い目がありません" % bc.min_ev
-                       if mk else "オッズが無いため判断できません"}
+                       if mk else "使えるオッズが無いため判断できません"}
         else:
             ev = (bets["期待値"] * bets["金額"]).sum() / bets["金額"].sum()
             summary = {"判断": "購入候補あり", "合計金額": int(bets["金額"].sum()), "点数": int(len(bets)),
