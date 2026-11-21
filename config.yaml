@@ -1,0 +1,82 @@
+# 競馬予想・分析アプリ 設定ファイル
+# パスはこのファイルがあるフォルダからの相対パスです。
+
+database:
+  # SQLite のファイル。PostgreSQL に移すときは url を
+  #   postgresql+psycopg://user:pass@localhost/keiba
+  # のように書き換えます（SQLAlchemy の接続URL）。
+  url: sqlite:///data/keiba.db
+
+scraper:
+  # リクエストの最小間隔（秒）。2秒未満は設定しても2秒に切り上げます。
+  min_interval_sec: 3.0
+  # 間隔に加えるランダムな揺らぎ（秒）
+  jitter_sec: 1.0
+  timeout_sec: 30
+  max_retries: 4
+  user_agent: "Mozilla/5.0 (personal keiba research; low-frequency)"
+  cache_dir: data/cache
+  # 確定オッズ（単勝・複勝・馬連・ワイド・三連複）を取得するのは、
+  # この日付以降のレースだけにします（取得量が多いため）。
+  # バックテストで馬連・ワイド・三連複の期待値を使う場合に必要です。
+  final_odds_since: "2024-01-01"
+  # 馬の詳細（プロフィール・血統）を取得するかどうか
+  fetch_horse_details: true
+  # 騎手のプロフィール（所属）を取得するかどうか
+  fetch_jockey_details: true
+
+collect:
+  # 期間を指定しないで collect を実行したときに取得する年数
+  default_years: 5
+
+model:
+  dir: data/models
+  # 検証に使う直近期間（月）。この期間より前で学習し、この期間で評価します。
+  valid_months: 6
+  # 新しいモデルを採用する条件：検証の logloss(複勝) が「今のモデルの検証成績 + この値」以下
+  adopt_tolerance: 0.002
+  # 学習データがこれより少ないと警告する
+  min_train_races: 300
+  # バックテスト（walk-forward）で毎回学習する木の数
+  walk_forward_trees: 300
+  lightgbm:
+    n_estimators: 600
+    learning_rate: 0.03
+    num_leaves: 31
+    min_child_samples: 40
+    subsample: 0.8
+    subsample_freq: 1
+    colsample_bytree: 0.8
+    reg_lambda: 1.0
+
+stats:
+  # この出走数未満の集計結果には「参考値」の注意を付けます
+  min_runs_warning: 30
+
+betting:
+  # ケリー基準に掛ける割合（0.25 = 1/4ケリー）
+  kelly_fraction: 0.25
+  # 期待値がこの値を超えた買い目だけを候補にします
+  min_expected_value: 1.05
+  # 1点あたりの最小購入額（円）
+  min_bet: 100
+  # 1レースで予算のうち使う上限の割合
+  max_race_exposure: 0.5
+  # 買い目候補にする最大点数（券種ごと）
+  max_tickets_per_type: 5
+  # 当たる確率がこれ未満の買い目は候補にしない（穴馬の過大評価を防ぐ）
+  min_prob:
+    単勝: 0.04
+    複勝: 0.15
+    馬連: 0.015
+    ワイド: 0.04
+    三連複: 0.006
+  # 期待値の計算には「モデルの勝率」と「単勝オッズから出した勝率」を合成した確率を使います。
+  # 合成の比率は学習のたびに検証データから自動で決めます（モデルに保存）。
+  # ここに数値（0〜1、1=モデルだけ）を書くと、その値で固定します。
+  market_alpha: auto
+
+weekly:
+  # 毎週日曜に「答え合わせ→再学習」の対象にする期間（日）
+  lookback_days: 8
+  report_dir: data/reports
